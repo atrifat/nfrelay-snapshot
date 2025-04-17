@@ -1,0 +1,72 @@
+name: Nightly Snapshot
+
+env:
+  NAK_VERSION: v0.13.2
+
+on:
+  schedule:
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+
+jobs:
+  nightly-snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate Snapshot Name
+        id: generate_snapshot_name
+        run: |
+          SINCE=${SINCE:-$(date -d 'yesterday 00:00:00 UTC' '+%s')}
+          DATE_YESTERDAY=$(date -d @$SINCE +%Y%m%d)
+          UNTIL=${UNTIL:-$(date -d 'today 00:00:00 UTC' '+%s')}
+          DATE_TODAY=$(date -d @$UNTIL '+%Y%m%d')
+          echo "SINCE=${SINCE}" >> $GITHUB_ENV
+          echo "UNTIL=${UNTIL}" >> $GITHUB_ENV
+          echo "DATE_YESTERDAY=${DATE_YESTERDAY}" >> $GITHUB_ENV
+          echo "DATE_TODAY=${DATE_TODAY}" >> $GITHUB_ENV
+          echo "BACKUP_FILE=backup_${DATE_YESTERDAY}_to_${DATE_TODAY}.jsonl.gz" >> $GITHUB_ENV
+
+      - name: Cache nak
+        id: cache-nak
+        uses: actions/cache@v4
+        with:
+          path: nak
+          key: ${{ runner.id }}-nak-${{ hashFiles('**/nak') }}
+          restore-keys: |
+            ${{ runner.id }}-nak-
+
+      - name: Download nak
+        if: steps.cache-nak.outputs.cache-hit != 'true'
+        run: |
+          echo "Downloading nak..."
+          URL="https://github.com/fiatjaf/nak/releases/download/${NAK_VERSION}/nak-${NAK_VERSION}-linux-amd64"
+          curl -L -o nak "${URL}" || { echo "Download failed!"; exit 1; }
+
+      - name: Prepare nak
+        run: |
+          chmod +x nak
+          cp nak /usr/local/bin/
+
+      - name: Take snapshot
+        run: |
+          bash snapshot.sh
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-${{ env.DATE_YESTERDAY }}-${{ env.DATE_TODAY }}
+          draft: false
+          prerelease: true
+          files: ${{ env.BACKUP_FILE }}
+          body: "Snapshot of Nostr events from nfrelay.app ${{ env.DATE_YESTERDAY }}-${{ env.DATE_TODAY }}"
+
+      - name: Upload Snapshot as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BACKUP_FILE }}
+          path: ${{ env.BACKUP_FILE }}
